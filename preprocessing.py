@@ -11,8 +11,8 @@ training_dir = "./training_dataset"
 training_dataset = os.path.join(training_dir, "train.parquet")
 testing_dataset  = os.path.join(training_dir, "test.parquet")
 
-BATCH_SIZE = 128
-COMPRESSION = "zstd"
+batch_size = 128
+compression_method = "zstd"
 
 # build prompt
 def build_prompt(row) -> str:
@@ -60,7 +60,7 @@ def write_parquet(df: pd.DataFrame, zf: zipfile.ZipFile, path: str):
             writer = pq.ParquetWriter(
                 path,
                 table.schema,
-                compression=COMPRESSION,
+                compression=compression_method,
                 use_dictionary=True,
                 write_statistics=True,
             )
@@ -77,7 +77,7 @@ def write_parquet(df: pd.DataFrame, zf: zipfile.ZipFile, path: str):
             "answer": str(row["Answer_label"]).strip().upper(),  
         })
 
-        if len(buf) >= BATCH_SIZE:
+        if len(buf) >= batch_size:
             flush()
 
     if buf:
