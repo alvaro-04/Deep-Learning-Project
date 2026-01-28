@@ -22,10 +22,10 @@ def build_prompt(row):
     c = str(row["Choice C"]).strip()
     d = str(row["Choice D"]).strip()
     return (
-        "<image>\n"
+        # "<image>\n"
         f"Question: {q}\n"
-        f"{a}\n{b}\n{c}\n{d}\n"
-        "Only the letter A, B, C or D\n"
+        f"Options: {a}\n{b}\n{c}\n{d}\n"
+        # "Only with the letter A, B, C or D\n" (instruction added in finetuning chat template)
     )
 
 # read images into bytes
