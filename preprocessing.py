@@ -3,7 +3,8 @@ import zipfile
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-
+from datasets import load_dataset, Image 
+#from datasets import load_from_disk
 
 raw_dir = "./raw"                 
 training_dir = "./training_dataset"    
@@ -85,6 +86,22 @@ def write_parquet(df: pd.DataFrame, zf: zipfile.ZipFile, path: str):
     if writer is not None:
         writer.close()
 
+def wrap_bytes(example):
+
+    return {"image": {"bytes": example["image_bytes"]}}
+
+def change_bytes_to_pil(parquet_path: str, image_dir: str):
+
+    ds = load_dataset("parquet", data_files=parquet_path, split="train")
+    ds = ds.rename_column("image", "image_bytes")
+    ds = ds.map(wrap_bytes)
+    ds = ds.cast_column("image", Image(decode=True))
+    ds = ds.remove_columns(["image_bytes"])
+
+    os.makedirs(image_dir, exist_ok=True)
+    ds.save_to_disk(image_dir)
+
+
 def main():
     train_csv = os.path.join(raw_dir, "train.csv")
     test_csv  = os.path.join(raw_dir, "test.csv")
@@ -93,12 +110,30 @@ def main():
     train_df = pd.read_csv(train_csv)
     test_df  = pd.read_csv(test_csv)
 
+
     with zipfile.ZipFile(zip_path, "r") as zf:
 
         write_parquet(train_df, zf, os.path.join(training_dir, "train.parquet"))
         write_parquet(test_df,  zf, os.path.join(training_dir, "test.parquet"))
 
+    change_bytes_to_pil(os.path.join(training_dir, "train.parquet"), os.path.join(training_dir, "image_train"))
+    change_bytes_to_pil(os.path.join(training_dir, "test.parquet"),  os.path.join(training_dir, "image_test"))
+
+    """
+    print("image_path:", os.path.join(training_dir, "image_train"), os.path.join(training_dir, "image_test"))
     print("Done:", os.path.join(training_dir, "train.parquet"), os.path.join(training_dir, "test.parquet"))
+
+    ds = load_from_disk("./training_dataset/image_train")
+    print(ds)
+    print(ds.column_names)
+    print(ds.features)  
+
+    x = ds[0]
+    print(type(x["image"]))           
+    print(x["image"].mode, x["image"].size)
+    print(x["question"][:150])
+    print(x["answer"])
+    """
 
 if __name__ == "__main__":
     main()
