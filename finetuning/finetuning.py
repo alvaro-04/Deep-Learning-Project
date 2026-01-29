@@ -31,8 +31,10 @@ model = FastVisionModel.get_peft_model(
 )
 
 #Getting data (assuming in parquet format as a placeholder for now)
-dataset = load_dataset("parquet", data_files={'train': 'train.parquet', 'test': 'test.parquet'})
-
+dataset = load_dataset("parquet", data_files={
+    'train': 'training_dataset/train.parquet', 
+    'test': 'training_dataset/test.parquet'
+})
 instruction = "Answer the following question with either A, B, C or D."
 
 #Assuming parquet consists of image, question and response
