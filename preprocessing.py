@@ -3,6 +3,7 @@ import zipfile
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import datasets
 from datasets import load_dataset, Image 
 #from datasets import load_from_disk
 
@@ -11,11 +12,10 @@ training_dir = "./training_dataset"
 training_dataset = os.path.join(training_dir, "train.parquet")
 testing_dataset  = os.path.join(training_dir, "test.parquet")
 
-batch_size = 128
-compression_method = "zstd"
 
-# build prompt
-def build_prompt(row) -> str:
+# build prompt 
+# idea from: https://dev.to/nagasuresh_dondapati_d5df/15-prompting-techniques-every-developer-should-know-for-code-generation-1go2
+def build_prompt(row):
     q = str(row["Question"]).strip()
     a = str(row["Choice A"]).strip()
     b = str(row["Choice B"]).strip()
@@ -25,115 +25,65 @@ def build_prompt(row) -> str:
         "<image>\n"
         f"Question: {q}\n"
         f"{a}\n{b}\n{c}\n{d}\n"
-        "Only answer the letter A, B, C or D\n"
+        "Only the letter A, B, C or D\n"
     )
 
 # read images into bytes
-def read_images(zf, fig: str) -> bytes:
-
-    fig = str(fig).strip().lstrip("./")
-    for image in (fig, f"images/{fig}", f"images/images/{fig}"):
-        try:
-            return zf.read(image)
-        except KeyError:
-            pass
-
-    base = os.path.basename(fig)
-    for name in zf.namelist():
-        if os.path.basename(name) == base:
-            return zf.read(name)
-
-    raise KeyError(f"Not found in zip: {fig}")
+def read_images(zf, fig):
+    fig = str(fig).strip()
+    if fig.startswith("./"):
+        fig = fig[2:]
+    return zf.read("images/"+fig)
 
 # write the data into parquet file : image, question and answer
-def write_parquet(df: pd.DataFrame, zf: zipfile.ZipFile, path: str):
-    if os.path.exists(path):
-        os.remove(path)
+# idea from: https://www.quora.com/How-do-I-convert-CSV-to-parquet-using-Python-and-without-using-Spark
+def write_parquet(csv_path, zf, parquet_path):
+    if os.path.exists(parquet_path):
+        os.remove(parquet_path)
 
     writer = None
-    buf = []
 
-    def flush():
-        nonlocal writer, buf
-        table = pa.Table.from_pylist(buf)  
+    for chunk in pd.read_csv(csv_path, chunksize = 1000):
+        rows = []
+        for i in range(len(chunk)):
+            row = chunk.iloc[i]
+            fig = str(row["Figure_path"]).strip()
+            img_bytes = read_images(zf, fig)
+
+            rows.append({
+                "image": {"bytes": img_bytes},
+                "question": build_prompt(row),
+                "answer": str(row["Answer_label"]).strip().upper(),
+            })
+
+        table = pa.Table.from_pylist(rows)
+
         if writer is None:
-            writer = pq.ParquetWriter(
-                path,
-                table.schema,
-                compression=compression_method,
-                use_dictionary=True,
-                write_statistics=True,
-            )
+            writer = pq.ParquetWriter(parquet_path, table.schema, compression="snappy")
+
         writer.write_table(table)
-        buf = []
 
-    for _, row in df.iterrows():
-        fig = str(row["Figure_path"]).strip()
-        img_bytes = read_images(zf, fig)
-
-        buf.append({
-            "image": img_bytes,
-            "question": build_prompt(row),
-            "answer": str(row["Answer_label"]).strip().upper(),  
-        })
-
-        if len(buf) >= batch_size:
-            flush()
-
-    if buf:
-        flush()
-
-    if writer is not None:
+    if writer:
         writer.close()
-
-def wrap_bytes(example):
-
-    return {"image": {"bytes": example["image_bytes"]}}
-
-def change_bytes_to_pil(parquet_path: str, image_dir: str):
-
-    ds = load_dataset("parquet", data_files=parquet_path, split="train")
-    ds = ds.rename_column("image", "image_bytes")
-    ds = ds.map(wrap_bytes)
-    ds = ds.cast_column("image", Image(decode=True))
-    ds = ds.remove_columns(["image_bytes"])
-
-    os.makedirs(image_dir, exist_ok=True)
-    ds.save_to_disk(image_dir)
-
 
 def main():
     train_csv = os.path.join(raw_dir, "train.csv")
     test_csv  = os.path.join(raw_dir, "test.csv")
     zip_path  = os.path.join(raw_dir, "images.zip")
 
-    train_df = pd.read_csv(train_csv)
-    test_df  = pd.read_csv(test_csv)
-
-
     with zipfile.ZipFile(zip_path, "r") as zf:
+        write_parquet(train_csv, zf, training_dataset)
+        write_parquet(test_csv, zf, testing_dataset)
 
-        write_parquet(train_df, zf, os.path.join(training_dir, "train.parquet"))
-        write_parquet(test_df,  zf, os.path.join(training_dir, "test.parquet"))
+# idea from: https://huggingface.co/docs/datasets/en/about_mapstyle_vs_iterable
+    ds_train = load_dataset("parquet", data_files=training_dataset, split="train")
+    ds_train = ds_train.cast_column("image", Image(decode=True))
+    ds_train.save_to_disk(os.path.join(training_dir, "image_train"))
 
-    change_bytes_to_pil(os.path.join(training_dir, "train.parquet"), os.path.join(training_dir, "image_train"))
-    change_bytes_to_pil(os.path.join(training_dir, "test.parquet"),  os.path.join(training_dir, "image_test"))
+    ds_test = load_dataset("parquet", data_files=testing_dataset, split="train")
+    ds_test = ds_test.cast_column("image", Image(decode=True))
+    ds_test.save_to_disk(os.path.join(training_dir, "image_test"))
 
-    """
-    print("image_path:", os.path.join(training_dir, "image_train"), os.path.join(training_dir, "image_test"))
-    print("Done:", os.path.join(training_dir, "train.parquet"), os.path.join(training_dir, "test.parquet"))
-
-    ds = load_from_disk("./training_dataset/image_train")
-    print(ds)
-    print(ds.column_names)
-    print(ds.features)  
-
-    x = ds[0]
-    print(type(x["image"]))           
-    print(x["image"].mode, x["image"].size)
-    print(x["question"][:150])
-    print(x["answer"])
-    """
 
 if __name__ == "__main__":
     main()
