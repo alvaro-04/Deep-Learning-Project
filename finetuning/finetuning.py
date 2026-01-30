@@ -1,8 +1,9 @@
 from unsloth import FastVisionModel
-from datasets import load_dataset
+from datasets import load_dataset, Image
 import torch
 from unsloth.trainer import UnslothVisionDataCollator
 from trl import SFTTrainer, SFTConfig
+import os
 
 
 # Import model
@@ -30,48 +31,58 @@ model = FastVisionModel.get_peft_model(
     loftq_config = None,
 )
 
-#Getting data (assuming in parquet format as a placeholder for now)
+# Memory tracking
+start_gpu_memory = round(torch.cuda.memory_reserved() / 1024 / 1024 / 1024, 3)
+max_memory = round(torch.cuda.get_device_properties(0).total_memory / 1024 / 1024 / 1024, 3)
+
+# Getting data from parquet
 dataset = load_dataset("parquet", data_files={
     'train': 'training_dataset/train.parquet', 
     'test': 'training_dataset/test.parquet'
-})
-instruction = "Answer the following question with either A, B, C or D."
+})['train']
 
-#Assuming parquet consists of image, question and response
-def convert_to_conversation(sample):
-    conversation = [
-        { "role": "user",
-          "content" : [
-            {"type" : "text", "text"  : instruction},
-            {"type" : "image", "image" : sample["image"]},
-            {"type" : "text", "text" : sample["question"]}]
-        },
-        { "role" : "assistant",
-          "content" : [
-            {"type" : "text",  "text"  : sample["response"]} ]
-        },
-    ]
-    return { "messages" : conversation }
+# from llava 1.5 kaggle notebook  https://www.kaggle.com/code/sachidanandnavik/fine-tuning-llava-1-5-7b-on-agricultural-datasets
+def transform_to_llava_format(sample):
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"{sample['question']}\nAnswer with the letter A, B, C or D."},
+                    {"type": "image", "image": sample["image"]}
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": sample["answer"]}
+                ]
+            }
+        ]
+    }
 
-# Convert to format
-converted_dataset = [convert_to_conversation(sample) for sample in dataset]
+# Apply the transformation
+dataset = dataset.map(
+    transform_to_llava_format, 
+    remove_columns=['question', 'answer', 'image'],  # Remove original columns
+    num_proc=os.cpu_count()
+)
 
 ###########Training step#################
 
 FastVisionModel.for_training(model)
 
 # Configure trainer
-# (Parameters from Unsloth docs)
 trainer = SFTTrainer(
     model = model,
     tokenizer = tokenizer,
     data_collator = UnslothVisionDataCollator(model, tokenizer),
-    train_dataset = converted_dataset,
+    train_dataset = dataset,
     args = SFTConfig(
         per_device_train_batch_size = 2,
         gradient_accumulation_steps = 4,
         warmup_steps = 5,
-        # max_steps = 30,
+        # max_steps = 1000,
         num_train_epochs = 1,
         learning_rate = 2e-4,
         logging_steps = 1,
@@ -80,16 +91,15 @@ trainer = SFTTrainer(
         lr_scheduler_type = "linear",
         seed = 3407,
         output_dir = "outputs",
-        report_to = "none",     # For Weights and Biases
+        report_to = "none",
 
         remove_unused_columns = False,
-        dataset_text_field = "",
         dataset_kwargs = {"skip_prepare_dataset": True},
-        max_length = 2048,
+        max_seq_length = 2048,
     ),
 )
 
-#Begin training
+# Begin training
 trainer_stats = trainer.train()
 
 # Post-training stats
@@ -109,6 +119,6 @@ print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.
 
 ##########MODEL SAVING#############
 
-#NB: only saves LoRA heads!!
+# NB: only saves LoRA heads!!
 model.save_pretrained("lora_llava")
 tokenizer.save_pretrained("lora_llava")
