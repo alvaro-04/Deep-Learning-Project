@@ -67,6 +67,8 @@ def write_parquet(csv_path, zf, parquet_path):
         writer.close()
 
 def main():
+    os.environ["HF_DATASETS_CACHE"] = os.path.join(os.environ.get("TMPDIR", "./"), "hf_cache")
+    os.makedirs(os.environ["HF_DATASETS_CACHE"], exist_ok=True)
     train_csv = os.path.join(raw_dir, "train.csv")
     test_csv  = os.path.join(raw_dir, "test.csv")
     zip_path  = os.path.join(raw_dir, "images.zip")
@@ -78,12 +80,12 @@ def main():
 # idea from: https://huggingface.co/docs/datasets/en/about_mapstyle_vs_iterable
     ds_train = load_dataset("parquet", data_files=training_dataset, split="train")
     ds_train = ds_train.cast_column("image", Image(decode=True))
-    ds_train.save_to_disk(os.path.join(training_dir, "image_train"))
+    # ds_train.save_to_disk(os.path.join(training_dir, "image_train"))
 
     ds_test = load_dataset("parquet", data_files=testing_dataset, split="train")
     ds_test = ds_test.cast_column("image", Image(decode=True))
-    ds_test.save_to_disk(os.path.join(training_dir, "image_test"))
-
+    # ds_test.save_to_disk(os.path.join(training_dir, "image_test"))
+    print(f"Preprocessing finished. Parquet files in {training_dir}")
 
 if __name__ == "__main__":
     main()
