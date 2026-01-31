@@ -5,6 +5,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import datasets
 from datasets import load_dataset, Image 
+from PIL import Image as PILImage
+from io import BytesIO
 #from datasets import load_from_disk
 
 raw_dir = "./raw"                 
@@ -28,24 +30,42 @@ def build_prompt(row):
         # "Only with the letter A, B, C or D\n" (instruction added in finetuning chat template)
     )
 
-# read images into bytes
+# read images into bytes and resize to 50%
 def read_images(zf, fig):
     fig = str(fig).strip()
     if fig.startswith("./"):
         fig = fig[2:]
-    return zf.read("images/"+fig)
+    
+    img_bytes = zf.read("images/"+fig)
+    
+    # Resize image to 50%
+    img = PILImage.open(BytesIO(img_bytes))
+    width, height = img.size
+    new_width = int(width * 0.5)
+    new_height = int(height * 0.5)
+    img_resized = img.resize((new_width, new_height), PILImage.LANCZOS)
+    
+    # Convert back to bytes
+    buffer = BytesIO()
+    img_resized.save(buffer, format=img.format if img.format else 'PNG')
+    
+    return buffer.getvalue()
 
 # write the data into parquet file : image, question and answer
 # idea from: https://www.quora.com/How-do-I-convert-CSV-to-parquet-using-Python-and-without-using-Spark
-def write_parquet(csv_path, zf, parquet_path):
+def write_parquet(csv_path, zf, parquet_path, max_entries=17000):
     if os.path.exists(parquet_path):
         os.remove(parquet_path)
 
     writer = None
+    total_processed = 0
 
     for chunk in pd.read_csv(csv_path, chunksize = 1000):
         rows = []
         for i in range(len(chunk)):
+            if total_processed >= max_entries:
+                break
+                
             row = chunk.iloc[i]
             fig = str(row["Figure_path"]).strip()
             img_bytes = read_images(zf, fig)
@@ -55,6 +75,11 @@ def write_parquet(csv_path, zf, parquet_path):
                 "question": build_prompt(row),
                 "answer": str(row["Answer_label"]).strip().upper(),
             })
+            
+            total_processed += 1
+
+        if not rows:
+            break
 
         table = pa.Table.from_pylist(rows)
 
@@ -62,6 +87,9 @@ def write_parquet(csv_path, zf, parquet_path):
             writer = pq.ParquetWriter(parquet_path, table.schema, compression="snappy")
 
         writer.write_table(table)
+        
+        if total_processed >= max_entries:
+            break
 
     if writer:
         writer.close()
