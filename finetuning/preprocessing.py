@@ -7,7 +7,6 @@ import datasets
 from datasets import load_dataset, Image 
 from PIL import Image as PILImage
 from io import BytesIO
-#from datasets import load_from_disk
 
 raw_dir = "./raw"                 
 training_dir = "./training_dataset"    
@@ -24,10 +23,8 @@ def build_prompt(row):
     c = str(row["Choice C"]).strip()
     d = str(row["Choice D"]).strip()
     return (
-        # "<image>\n"
         f"Question: {q}\n"
         f"Options: {a}\n{b}\n{c}\n{d}\n"
-        # "Only with the letter A, B, C or D\n" (instruction added in finetuning chat template)
     )
 
 # read images into bytes and resize to 50%
@@ -108,11 +105,11 @@ def main():
 # idea from: https://huggingface.co/docs/datasets/en/about_mapstyle_vs_iterable
     ds_train = load_dataset("parquet", data_files=training_dataset, split="train")
     ds_train = ds_train.cast_column("image", Image(decode=True))
-    # ds_train.save_to_disk(os.path.join(training_dir, "image_train"))
+    
 
     ds_test = load_dataset("parquet", data_files=testing_dataset, split="train")
     ds_test = ds_test.cast_column("image", Image(decode=True))
-    # ds_test.save_to_disk(os.path.join(training_dir, "image_test"))
+
     print(f"Preprocessing finished. Parquet files in {training_dir}")
 
 if __name__ == "__main__":
